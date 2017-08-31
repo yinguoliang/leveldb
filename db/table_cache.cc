@@ -108,9 +108,18 @@ Status TableCache::Get(const ReadOptions& options,
                        const Slice& k,
                        void* arg,
                        void (*saver)(void*, const Slice&, const Slice&)) {
-  Cache::Handle* handle = NULL;
+  /*
+  *  table cache 可以优化磁盘读取
+  *  目标是：根据给定的key，以尽可能小的代价，找到key存储的sst文件
+  *  主要的代价包括：
+  *      IO
+  *      减少打开文件数（FD限制）
+  */
+  Cache::Handle* handle = NULL; //cache句柄
+  //找到sst缓存的table
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
+    //找到的table，直接从table中获取key对应的value（可能有，也可能没有）
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
     s = t->InternalGet(options, k, arg, saver);
     cache_->Release(handle);

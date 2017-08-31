@@ -348,12 +348,17 @@ Status Version::Get(const ReadOptions& options,
   // in an smaller level, later levels are irrelevant.
   std::vector<FileMetaData*> tmp;
   FileMetaData* tmp2;
+  /*
+  *   依次遍历level
+  *   这里需要找到每个level下，key可能会在那个sst文件中（按照key range判断）
+  *   注意：在key range里面不意味key一定存在，所以找到带选文件之后，还要把文件读出来，看看key是否真的在里面
+  */
   for (int level = 0; level < config::kNumLevels; level++) {
     size_t num_files = files_[level].size();
     if (num_files == 0) continue;
 
     // Get the list of files to search in this level
-    FileMetaData* const* files = &files_[level][0];
+    FileMetaData* const* files = &files_[level][0]; //备选文件（可能有多个）
     if (level == 0) {
       // Level-0 files may overlap each other.  Find all files that
       // overlap user_key and process them in order from newest to oldest.
@@ -362,7 +367,7 @@ Status Version::Get(const ReadOptions& options,
         FileMetaData* f = files[i];
         if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
             ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
-          tmp.push_back(f);
+          tmp.push_back(f);//level 0的key可能跨文件了，需要把所有可能的文件都拿到
         }
       }
       if (tmp.empty()) continue;
@@ -388,7 +393,9 @@ Status Version::Get(const ReadOptions& options,
         }
       }
     }
-
+    /*
+    * 判断备选文件中是否存在key（如果本层不存在，下层也是按照这个套路来找的）
+    */
     for (uint32_t i = 0; i < num_files; ++i) {
       if (last_file_read != NULL && stats->seek_file == NULL) {
         // We have had more than one seek for this read.  Charge the 1st file.
@@ -405,6 +412,7 @@ Status Version::Get(const ReadOptions& options,
       saver.ucmp = ucmp;
       saver.user_key = user_key;
       saver.value = value;
+      //------- table cache优化，毕竟每次都读磁盘，效率和性能都扛不住的----------
       s = vset_->table_cache_->Get(options, f->number, f->file_size,
                                    ikey, &saver, SaveValue);
       if (!s.ok()) {
