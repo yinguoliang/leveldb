@@ -300,11 +300,17 @@ Status DBImpl::Recover(VersionEdit* edit, bool *save_manifest) {
           dbname_, "exists (error_if_exists is true)");
     }
   }
-
+  /*
+  *   1. 恢复当前version信息，主要的逻辑就是从CURRENT中读取manifest信息，然后用manifest内容恢复current_version
+  *   
+  */
   s = versions_->Recover(save_manifest);
   if (!s.ok()) {
     return s;
   }
+  /*
+  *   2. 下面从log文件中恢复（memtable，imm_memtable)
+  */
   SequenceNumber max_sequence(0);
 
   // Recover from all newer log files than the ones named in the
@@ -322,6 +328,9 @@ Status DBImpl::Recover(VersionEdit* edit, bool *save_manifest) {
     return s;
   }
   std::set<uint64_t> expected;
+  /*
+  *    加载所有的文件管理信息
+  */
   versions_->AddLiveFiles(&expected);
   uint64_t number;
   FileType type;
@@ -693,7 +702,7 @@ void DBImpl::BackgroundCompaction() {
   * ---如果imm_不为空，则进行打包------
   */
   if (imm_ != NULL) {
-    CompactMemTable(); 
+    CompactMemTable(); //打包memtable的过程比较简单，直接写到一个level0文件即可
     return;
   }
 
@@ -719,6 +728,7 @@ void DBImpl::BackgroundCompaction() {
         (m->done ? "(end)" : manual_end.DebugString().c_str()));
   } else {
     //自动获取打包对象
+    //
     c = versions_->PickCompaction();
   }
 
@@ -728,11 +738,20 @@ void DBImpl::BackgroundCompaction() {
   } else if (!is_manual && c->IsTrivialMove()) {
     // Move file to next level
     assert(c->num_input_files(0) == 1);
+    /*
+    *   compaction的过程就是将 level i 和 相关的level i+1 层的数据合并
+    *   由于sst是不能修改的，所以要生成新的sst
+    *   另外由于sst的key是有序的，所以可以只用多路归并排序来处理合并
+    */
     FileMetaData* f = c->input(0, 0);
     c->edit()->DeleteFile(c->level(), f->number);
     c->edit()->AddFile(c->level() + 1, f->number, f->file_size,
                        f->smallest, f->largest);
+    /*
+    *   这里应该是记录日志
+    */
     status = versions_->LogAndApply(c->edit(), &mutex_);
+
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
@@ -963,8 +982,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       last_sequence_for_key = kMaxSequenceNumber;
     } else {
       if (!has_current_user_key ||
-          user_comparator()->Compare(ikey.user_key,
-                                     Slice(current_user_key)) != 0) {
+          user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) != 0) {
         // First occurrence of this user key
         current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
         has_current_user_key = true;

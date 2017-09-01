@@ -118,7 +118,14 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
   FileMetaData f;
   Slice str;
   InternalKey key;
-
+  /*
+  *  input虽然是一个slice，但是它还是有结构的
+  *  通过在数据前设置一个tag，可以通过slice存储很多信息
+  * （类似的设计思想在很多框架中都有使用，如java class文件）
+  */
+  /*
+  *   这里顺序读取slice，从里面抽取相关信息，并填入相关字段
+  */
   while (msg == NULL && GetVarint32(&input, &tag)) {
     switch (tag) {
       case kComparator:

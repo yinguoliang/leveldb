@@ -413,6 +413,7 @@ Status Version::Get(const ReadOptions& options,
       saver.user_key = user_key;
       saver.value = value;
       //------- table cache优化，毕竟每次都读磁盘，效率和性能都扛不住的----------
+      // table_cache内部使用LRU缓存了最近打开的sst文件
       s = vset_->table_cache_->Get(options, f->number, f->file_size,
                                    ikey, &saver, SaveValue);
       if (!s.ok()) {
@@ -840,7 +841,8 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   edit->SetNextFile(next_file_number_);
   edit->SetLastSequence(last_sequence_);
 
-  Version* v = new Version(this);
+  //合并之后，开始新的version
+  Version* v = new Version(this);//创建新的version,并将其加入version_set中
   {
     Builder builder(this, current_);
     builder.Apply(edit);
@@ -919,6 +921,7 @@ Status VersionSet::Recover(bool *save_manifest) {
   };
 
   // Read "CURRENT" file, which contains a pointer to the current manifest file
+  // CURRENT文件中保存了当前使用的manifest文件名
   std::string current;
   Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
   if (!s.ok()) {
@@ -928,7 +931,7 @@ Status VersionSet::Recover(bool *save_manifest) {
     return Status::Corruption("CURRENT file does not end with newline");
   }
   current.resize(current.size() - 1);
-
+  //
   std::string dscname = dbname_ + "/" + current;
   SequentialFile* file;
   s = env_->NewSequentialFile(dscname, &file);
@@ -949,6 +952,8 @@ Status VersionSet::Recover(bool *save_manifest) {
   {
     LogReporter reporter;
     reporter.status = &s;
+    //这里的file是从CURRENT文件中读取出来的manifest文件
+    //manifest描述了当前版本的相关信息
     log::Reader reader(file, &reporter, true/*checksum*/, 0/*initial_offset*/);
     Slice record;
     std::string scratch;
@@ -1010,6 +1015,7 @@ Status VersionSet::Recover(bool *save_manifest) {
   }
 
   if (s.ok()) {
+    //恢复成功之后，创建新的version
     Version* v = new Version(this);
     builder.SaveTo(v);
     // Install recovered version
@@ -1314,7 +1320,8 @@ Compaction* VersionSet::PickCompaction() {
     for (size_t i = 0; i < current_->files_[level].size(); i++) {
       FileMetaData* f = current_->files_[level][i];
       if (compact_pointer_[level].empty() ||
-          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
+          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) 
+      {
         c->inputs_[0].push_back(f);
         break;
       }

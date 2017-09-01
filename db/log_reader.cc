@@ -57,6 +57,12 @@ bool Reader::SkipToInitialBlock() {
   return true;
 }
 
+/**
+*   实例方法，读取一个slice record
+*   注意：这是个实例方法，实例持有了一个外部文件（实际上是log文件）
+*   
+*   这里类是一个log类，有自己的业务含义
+*/
 bool Reader::ReadRecord(Slice* record, std::string* scratch) {
   if (last_record_offset_ < initial_offset_) {
     if (!SkipToInitialBlock()) {
@@ -72,6 +78,10 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
   uint64_t prospective_record_offset = 0;
 
   Slice fragment;
+  /*
+  *   这里为什么需要用死循环？？？
+  *   
+  */
   while (true) {
     const unsigned int record_type = ReadPhysicalRecord(&fragment);
 
