@@ -553,6 +553,10 @@ void Version::GetOverlappingInputs(
     user_end = end->user_key();
   }
   const Comparator* user_cmp = vset_->icmp_.user_comparator();
+  /*
+  *  遍历level层的所有有效的文件，判断每个文件是不是和(begin,end)范围有重叠
+  *  如果有，则加入inputs，等待进行compact
+  */
   for (size_t i = 0; i < files_[level].size(); ) {
     FileMetaData* f = files_[level][i++];
     const Slice file_start = f->smallest.user_key();
@@ -827,6 +831,9 @@ void VersionSet::AppendVersion(Version* v) {
 }
 
 Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
+  /*
+  *   将verstion edit写入manifest
+  */
   if (edit->has_log_number_) {
     assert(edit->log_number_ >= log_number_);
     assert(edit->log_number_ < next_file_number_);
@@ -1429,7 +1436,8 @@ Compaction* VersionSet::CompactRange(
     int level,
     const InternalKey* begin,
     const InternalKey* end) {
-  std::vector<FileMetaData*> inputs;
+  std::vector<FileMetaData*> inputs; //inputs用来保存根据(begin,end)找到的需要合并的文件
+
   current_->GetOverlappingInputs(level, begin, end, &inputs);
   if (inputs.empty()) {
     return NULL;

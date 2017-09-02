@@ -709,12 +709,16 @@ void DBImpl::BackgroundCompaction() {
   Compaction* c; ///----- 打包对象-----
   bool is_manual = (manual_compaction_ != NULL);
   InternalKey manual_end;
-  /*
-  *  ----手动获取打包对象------
-  * （这里应该是对应管理人员后台命令触发的情况）
-  */
+  
   if (is_manual) { 
+    /*
+    *  ----手动获取打包对象------
+    * （这里应该是对应管理人员后台命令触发的情况）
+    */
     ManualCompaction* m = manual_compaction_;
+    //用户触发的compact操作，会指定compact的key范围（即m->begin和m->end)
+    //根据begin和end的范围，程序会在相应的level中找到这个范围涉及的sst文件，并封装到Compaction对象中
+    //Compaction对象中持有需要合并的文件列表
     c = versions_->CompactRange(m->level, m->begin, m->end);
     m->done = (c == NULL);
     if (c != NULL) {
@@ -736,19 +740,17 @@ void DBImpl::BackgroundCompaction() {
   if (c == NULL) { ///c为null，表示没有获取到打包对象
     // Nothing to do
   } else if (!is_manual && c->IsTrivialMove()) {
+    //如果不是主动触发的，并且level中的输入文件与level+1中无重叠，且与level + 2中重叠不大于
+    //kMaxGrandParentOverlapBytes = 10 * kTargetFileSize,直接将文件移到level+1中
     // Move file to next level
     assert(c->num_input_files(0) == 1);
-    /*
-    *   compaction的过程就是将 level i 和 相关的level i+1 层的数据合并
-    *   由于sst是不能修改的，所以要生成新的sst
-    *   另外由于sst的key是有序的，所以可以只用多路归并排序来处理合并
-    */
+    
     FileMetaData* f = c->input(0, 0);
     c->edit()->DeleteFile(c->level(), f->number);
     c->edit()->AddFile(c->level() + 1, f->number, f->file_size,
                        f->smallest, f->largest);
     /*
-    *   这里应该是记录日志
+    *  将version edit存入manafest
     */
     status = versions_->LogAndApply(c->edit(), &mutex_);
 
@@ -766,6 +768,15 @@ void DBImpl::BackgroundCompaction() {
     CompactionState* compact = new CompactionState(c);
     /*
     *   开始打包
+    */
+    /*
+    *   compaction的过程就是将 level i 和 相关的level i+1 层的数据合并
+    *   由于sst是不能修改的，所以要生成新的sst
+    *   另外由于sst的key是有序的，所以可以只用多路归并排序来处理合并
+    */
+    /*
+    *  compact操作主要的业务逻辑就是：将上面选中的文件进行合并，生成新的文件
+    *  同时删除一些无用的文件
     */
     status = DoCompactionWork(compact);
     if (!status.ok()) {
@@ -843,8 +854,7 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   return s;
 }
 
-Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
-                                          Iterator* input) {
+Status DBImpl::FinishCompactionOutputFile(CompactionState* compact, Iterator* input) {
   assert(compact != NULL);
   assert(compact->outfile != NULL);
   assert(compact->builder != NULL);
@@ -878,9 +888,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
 
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
-    Iterator* iter = table_cache_->NewIterator(ReadOptions(),
-                                               output_number,
-                                               current_bytes);
+    Iterator* iter = table_cache_->NewIterator(ReadOptions(),output_number,current_bytes);
     s = iter->status();
     delete iter;
     if (s.ok()) {
@@ -930,7 +938,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
   assert(compact->builder == NULL);
   assert(compact->outfile == NULL);
-  if (snapshots_.empty()) {
+  if (snapshots_.empty()) 
     compact->smallest_snapshot = versions_->LastSequence();
   } else {
     compact->smallest_snapshot = snapshots_.oldest()->number_;
@@ -963,10 +971,13 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       mutex_.Unlock();
       imm_micros += (env_->NowMicros() - imm_start);
     }
-
+    /*
+    *  Iterator迭代器可以迭代遍历输入文件里面的每个key
+    *  以下的代码就针对这个key进行处理
+    *  注意：key是按照从小到大排序过的
+    */
     Slice key = input->key();
-    if (compact->compaction->ShouldStopBefore(key) &&
-        compact->builder != NULL) {
+    if (compact->compaction->ShouldStopBefore(key) && compact->builder != NULL) {
       status = FinishCompactionOutputFile(compact, input);
       if (!status.ok()) {
         break;
@@ -1026,16 +1037,19 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         }
       }
       if (compact->builder->NumEntries() == 0) {
+        //sst维护了本文件里面最小的key和最大的key
+        //这里设置最小的key到对象里面
+        //注意：key是按照从大到小排序过的，所以这里可以这么设置
         compact->current_output()->smallest.DecodeFrom(key);
       }
+      //维护最大的key（每次都设置，因为key是从小到大的排序的）
       compact->current_output()->largest.DecodeFrom(key);
       //将key/value对儿写入builder
       compact->builder->Add(key, input->value());
 
       // Close output file if it is big enough
-      //将完整的builder输出到sstable文件中
-      if (compact->builder->FileSize() >=
-          compact->compaction->MaxOutputFileSize()) {
+      //如果builder size达到限定值，则将内容写入磁盘
+      if (compact->builder->FileSize() >= compact->compaction->MaxOutputFileSize()) {
         status = FinishCompactionOutputFile(compact, input);
         if (!status.ok()) {
           break;
