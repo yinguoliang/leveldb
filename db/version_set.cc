@@ -677,24 +677,26 @@ class VersionSet::Builder {
   // Apply all of the edits in *edit to the current state.
   void Apply(VersionEdit* edit) {
     // Update compaction pointers
-    for (size_t i = 0; i < edit->compact_pointers_.size(); i++) {
+    for (size_t i = 0; i < edit->compact_pointers_.size(); i++) 
+    {
       const int level = edit->compact_pointers_[i].first;
-      vset_->compact_pointer_[level] =
-          edit->compact_pointers_[i].second.Encode().ToString();
+      vset_->compact_pointer_[level] = edit->compact_pointers_[i].second.Encode().ToString();
     }
 
     // Delete files
     const VersionEdit::DeletedFileSet& del = edit->deleted_files_;
     for (VersionEdit::DeletedFileSet::const_iterator iter = del.begin();
          iter != del.end();
-         ++iter) {
+         ++iter) 
+    {
       const int level = iter->first;
       const uint64_t number = iter->second;
       levels_[level].deleted_files.insert(number);
     }
 
     // Add new files
-    for (size_t i = 0; i < edit->new_files_.size(); i++) {
+    for (size_t i = 0; i < edit->new_files_.size(); i++) 
+    {
       const int level = edit->new_files_[i].first;
       FileMetaData* f = new FileMetaData(edit->new_files_[i].second);
       f->refs = 1;
@@ -724,7 +726,8 @@ class VersionSet::Builder {
   void SaveTo(Version* v) {
     BySmallestKey cmp;
     cmp.internal_comparator = &vset_->icmp_;
-    for (int level = 0; level < config::kNumLevels; level++) {
+    for (int level = 0; level < config::kNumLevels; level++) 
+    {
       // Merge the set of added files with the set of pre-existing files.
       // Drop any deleted files.  Store the result in *v.
       const std::vector<FileMetaData*>& base_files = base_->files_[level];
@@ -734,12 +737,14 @@ class VersionSet::Builder {
       v->files_[level].reserve(base_files.size() + added->size());
       for (FileSet::const_iterator added_iter = added->begin();
            added_iter != added->end();
-           ++added_iter) {
+           ++added_iter) 
+      {
         // Add all smaller files listed in base_
         for (std::vector<FileMetaData*>::const_iterator bpos
                  = std::upper_bound(base_iter, base_end, *added_iter, cmp);
              base_iter != bpos;
-             ++base_iter) {
+             ++base_iter) 
+        {
           MaybeAddFile(v, level, *base_iter);
         }
 
@@ -747,7 +752,8 @@ class VersionSet::Builder {
       }
 
       // Add remaining base files
-      for (; base_iter != base_end; ++base_iter) {
+      for (; base_iter != base_end; ++base_iter) 
+      {
         MaybeAddFile(v, level, *base_iter);
       }
 
@@ -820,7 +826,7 @@ void VersionSet::AppendVersion(Version* v) {
   if (current_ != NULL) {
     current_->Unref();
   }
-  current_ = v;
+  current_ = v;  //切换current_version
   v->Ref();
 
   // Append to linked list
@@ -1284,26 +1290,35 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
+
+  //level 0可能有多个文件,所以用size()+1. 其他level只有2个
   const int space = (c->level() == 0 ? c->inputs_[0].size() + 1 : 2);
   Iterator** list = new Iterator*[space];
   int num = 0;
+  /*
+  *  --------------------------------------------------
+  *  level 0 每个文件做成一个迭代对象，
+  *  最后通过NewMergingIterator将多个迭代对象进行包装
+  *  --------------------------------------------------
+  */
   for (int which = 0; which < 2; which++) {
     if (!c->inputs_[which].empty()) {
       if (c->level() + which == 0) {
+        //level 0的key可能有覆盖，所以需要特殊处理
         const std::vector<FileMetaData*>& files = c->inputs_[which];
         for (size_t i = 0; i < files.size(); i++) {
-          list[num++] = table_cache_->NewIterator(
-              options, files[i]->number, files[i]->file_size);
+          list[num++] = table_cache_->NewIterator(options, files[i]->number, files[i]->file_size);
         }
       } else {
         // Create concatenating iterator for the files from this level
+        //level > 0使用LevelFileNumIterator封装
         list[num++] = NewTwoLevelIterator(
-            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]),
-            &GetFileIterator, table_cache_, options);
+            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]), &GetFileIterator, table_cache_, options);
       }
     }
   }
   assert(num <= space);
+  //合并迭代器
   Iterator* result = NewMergingIterator(&icmp_, list, num);
   delete[] list;
   return result;

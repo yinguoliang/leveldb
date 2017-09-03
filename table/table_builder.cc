@@ -172,13 +172,13 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   block->Reset();
 }
 
-void TableBuilder::WriteRawBlock(const Slice& block_contents,
-                                 CompressionType type,
-                                 BlockHandle* handle) {
+void TableBuilder::WriteRawBlock(const Slice& block_contents,CompressionType type, BlockHandle* handle) {
   Rep* r = rep_;
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
+  //将block内容写入文件
   r->status = r->file->Append(block_contents);
+  //在block内容的后面，加上type和crc内容
   if (r->status.ok()) {
     char trailer[kBlockTrailerSize];
     trailer[0] = type;
@@ -206,8 +206,7 @@ Status TableBuilder::Finish() {
 
   // Write filter block
   if (ok() && r->filter_block != NULL) {
-    WriteRawBlock(r->filter_block->Finish(), kNoCompression,
-                  &filter_block_handle);
+    WriteRawBlock(r->filter_block->Finish(), kNoCompression,&filter_block_handle);
   }
 
   // Write metaindex block

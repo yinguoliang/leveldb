@@ -743,17 +743,22 @@ void DBImpl::BackgroundCompaction() {
     //如果不是主动触发的，并且level中的输入文件与level+1中无重叠，且与level + 2中重叠不大于
     //kMaxGrandParentOverlapBytes = 10 * kTargetFileSize,直接将文件移到level+1中
     // Move file to next level
-    assert(c->num_input_files(0) == 1);
-    
-    FileMetaData* f = c->input(0, 0);
-    c->edit()->DeleteFile(c->level(), f->number);
-    c->edit()->AddFile(c->level() + 1, f->number, f->file_size,
-                       f->smallest, f->largest);
     /*
-    *  将version edit存入manafest
+    * ----------------------------------------------------
+    *  注意这段代码的前提：level 和 level + 1层的key无交集
+    *  因为无交集，所以level层的文件不用和下面的文件合并，所以
+    *  我们可以直接将level层的文件下移到level + 1 即可
+    *  备注：文件下移之后，需要反映到manifest中
+    * ----------------------------------------------------
     */
+    assert(c->num_input_files(0) == 1);
+    FileMetaData* f = c->input(0, 0); 
+    //level层的文件删除
+    c->edit()->DeleteFile(c->level(), f->number);
+    //level+1层增加这个文件（文件本身不改变任何东西）
+    c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest, f->largest);
+    //将version edit存入manafest
     status = versions_->LogAndApply(c->edit(), &mutex_);
-
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
@@ -793,8 +798,7 @@ void DBImpl::BackgroundCompaction() {
   } else if (shutting_down_.Acquire_Load()) {
     // Ignore compaction errors found during shutting down
   } else {
-    Log(options_.info_log,
-        "Compaction error: %s", status.ToString().c_str());
+    Log(options_.info_log, "Compaction error: %s", status.ToString().c_str());
   }
 
   if (is_manual) {
@@ -924,7 +928,9 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   }
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
 }
-
+/**
+*  打包任务
+*/
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
   const uint64_t start_micros = env_->NowMicros();
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
@@ -985,27 +991,33 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     }
 
     // Handle key/value, add to state, etc.
-    bool drop = false;  //标记一个key/value对是否应该被丢弃
+    /*
+    *  标记一个key/value对是否应该被丢弃
+    *  如果可以被删除，则不用执行compaction操作
+    */
+    bool drop = false;  
     if (!ParseInternalKey(key, &ikey)) {
       // Do not hide error keys
       current_user_key.clear();
       has_current_user_key = false;
       last_sequence_for_key = kMaxSequenceNumber;
     } else {
-      if (!has_current_user_key ||
-          user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) != 0) {
+      if (!has_current_user_key || user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) != 0) 
+      {
         // First occurrence of this user key
         current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
         has_current_user_key = true;
         last_sequence_for_key = kMaxSequenceNumber;
       }
 
-      if (last_sequence_for_key <= compact->smallest_snapshot) {
+      if (last_sequence_for_key <= compact->smallest_snapshot) 
+      {
         // Hidden by an newer entry for same user key
         drop = true;    // (A)
       } else if (ikey.type == kTypeDeletion &&
                  ikey.sequence <= compact->smallest_snapshot &&
-                 compact->compaction->IsBaseLevelForKey(ikey.user_key)) {
+                 compact->compaction->IsBaseLevelForKey(ikey.user_key)) 
+      {
         // For this user key:
         // (1) there is no data in higher levels
         // (2) data in lower levels will have larger sequence numbers
@@ -1094,8 +1106,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     RecordBackgroundError(status);
   }
   VersionSet::LevelSummaryStorage tmp;
-  Log(options_.info_log,
-      "compacted to: %s", versions_->LevelSummary(&tmp));
+  Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
   return status;
 }
 

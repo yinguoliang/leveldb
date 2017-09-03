@@ -34,11 +34,10 @@ struct Table::Rep {
   BlockHandle metaindex_handle;  // Handle to metaindex_block: saved from footer
   Block* index_block;
 };
-
-Status Table::Open(const Options& options,
-                   RandomAccessFile* file,
-                   uint64_t size,
-                   Table** table) {
+/**
+*  打开sst文件
+*/
+Status Table::Open(const Options& options,RandomAccessFile* file,uint64_t size,Table** table) {
   *table = NULL;
   if (size < Footer::kEncodedLength) {
     return Status::Corruption("file is too short to be an sstable");
@@ -46,12 +45,21 @@ Status Table::Open(const Options& options,
 
   char footer_space[Footer::kEncodedLength];
   Slice footer_input;
-  Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength,
-                        &footer_input, footer_space);
+  /*
+  * 读取footer部分的内容
+  * Footer在sst文件中，占用固定大小的空间（48字节）
+  * Footer末尾是一串magic number, 然后就是data block index 和meta block index的偏移位置
+  */
+
+  /*
+  *  这里读取footer部分的逻辑是： size是文件的总大小，Footer:kEncodedLength是footer的大小
+  *  size - Footer:kEncodedLength 就是footer在文件中的偏移量， 读取结果放到 &footer_input里面
+  */
+  Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength, &footer_input, footer_space);
   if (!s.ok()) return s;
 
   Footer footer;
-  s = footer.DecodeFrom(&footer_input);
+  s = footer.DecodeFrom(&footer_input); //反序列化footer
   if (!s.ok()) return s;
 
   // Read the index block
